@@ -128,77 +128,37 @@ t[locale].homepage.hero.title({ name: "Mundo" }); // "Olá Mundo"
 
 ---
 
-## Development — Watch Mode
+## Next.js Plugin
 
-During development, run the watcher alongside your dev server. It watches your `translations/` folder and **regenerates `generated.ts` instantly** on every file change — new translations, edits, deleted files, new folders, everything.
-
-```json
-{
-  "scripts": {
-    "dev": "concurrently 'i18n-gen --watch' 'next dev'",
-    "i18n:watch": "i18n-gen --watch"
-  }
-}
-```
-
-```bash
-pnpm i18n:watch
-# [i18n] generated src/i18n/generated.ts -> en, pt
-# [i18n] watching translations/ ...
-```
-
-Edit a translation → save → the generated file updates → your dev server picks up the change via HMR. No restarts, no manual steps.
-
-> **Tip:** Use [`concurrently`](https://www.npmjs.com/package/concurrently) to run the watcher and dev server in parallel.
-
----
-
-## Production — Build
-
-For production, run generation **before** your build step. This ensures `generated.ts` is up-to-date when your bundler compiles the app.
-
-```json
-{
-  "scripts": {
-    "build": "i18n-gen && next build"
-  }
-}
-```
-
-```bash
-pnpm build
-# [i18n] generated src/i18n/generated.ts -> en, pt, es
-# ▲ Next.js 15.x
-# ✓ Compiled successfully
-```
-
-That's it. The generated file is a plain `.ts` module — your bundler (Next.js, Vite, whatever) handles it like any other source file. No plugins, no loaders, no special config.
-
----
-
-## Configuration
-
-Create an optional `i18n.config.ts` at your project root:
+One line in `next.config.ts`. No extra scripts, no `concurrently`, no webpack plugins.
 
 ```ts
-import { defineConfig } from "internationalization";
+// next.config.ts
+import { withInternationalization } from "internationalization/next";
 
-export default defineConfig({
-  root: "./translations",        // where your locale folders live
-  defaultLocale: "en",           // canonical locale
-  locales: ["en", "pt", "es"],   // explicit allow-list (optional)
-  out: "./src/i18n/generated.ts" // output path
+export default withInternationalization({
+  reactStrictMode: true,
 });
 ```
 
-All fields are optional — sensible defaults are applied:
+**That's it.** The plugin handles everything:
 
-| Option          | Default                      | Description                                    |
-|-----------------|------------------------------|------------------------------------------------|
-| `root`          | `"./translations"`           | Directory containing locale folders            |
-| `defaultLocale` | `"en"`                       | The canonical locale                            |
-| `locales`       | _auto-detected from folders_ | Explicit locale allow-list                      |
-| `out`           | `"./src/i18n/generated.ts"`  | Output path for the generated module            |
+- **`next dev`** → generates translations, then watches for changes. Edit a `t.ts` file → `generated.ts` is rewritten → Next.js HMR picks it up instantly.
+- **`next build`** → generates translations once before compilation starts.
+
+No dependency on webpack or Turbopack internals — it works by generating files on disk and letting Next.js's own file watcher handle the rest. Future-proof.
+
+### Custom i18n options
+
+```ts
+// next.config.ts
+import { withInternationalization } from "internationalization/next";
+
+export default withInternationalization(
+  { reactStrictMode: true },
+  { root: "./locales", out: "./src/i18n/generated.ts" },
+);
+```
 
 ---
 
@@ -229,8 +189,7 @@ my-app/
 │       └── [locale]/
 │           ├── layout.tsx
 │           └── page.tsx
-├── i18n.config.ts
-└── package.json
+└── next.config.ts
 ```
 
 ### Locale context
@@ -332,15 +291,43 @@ export function Navbar() {
 }
 ```
 
-### Scripts
+---
 
-```json
-{
-  "scripts": {
-    "dev": "concurrently 'i18n-gen --watch' 'next dev'",
-    "build": "i18n-gen && next build"
-  }
-}
+## CLI
+
+The plugin handles everything automatically, but you can also use the CLI standalone:
+
+```bash
+# One-shot generation
+npx i18n-gen
+
+# Watch mode
+npx i18n-gen --watch
+```
+
+---
+
+## Configuration
+
+All fields are optional — sensible defaults are applied:
+
+| Option          | Default                      | Description                                    |
+|-----------------|------------------------------|------------------------------------------------|
+| `root`          | `"./translations"`           | Directory containing locale folders            |
+| `defaultLocale` | `"en"`                       | The canonical locale                            |
+| `locales`       | _auto-detected from folders_ | Explicit locale allow-list                      |
+| `out`           | `"./src/i18n/generated.ts"`  | Output path for the generated module            |
+
+You can set these via the plugin's second argument, or in a standalone `i18n.config.ts`:
+
+```ts
+import { defineConfig } from "internationalization";
+
+export default defineConfig({
+  root: "./translations",
+  defaultLocale: "en",
+  out: "./src/i18n/generated.ts",
+});
 ```
 
 ---

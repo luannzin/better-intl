@@ -9,6 +9,7 @@ export const t = {
 			hero: {
 				title: (v: { name: string }) => `Hello ${v.name}`,
 				subtitle: "Welcome",
+				description: "This is a description",
 			},
 		},
 	},
