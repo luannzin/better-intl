@@ -47,15 +47,18 @@ function buildChain(locale: string, config: I18nConfig): string[] {
 	];
 }
 
-/** Pick the best string for `locale` from a locale map, following the chain. */
+/**
+ * Pick the best string for a locale from a locale map, following its
+ * precomputed fallback `chain` (`locale → fallback… → defaultLocale`).
+ */
 function resolveLocale(
 	map: LocaleMap,
 	locale: string,
-	config: I18nConfig,
+	chain: readonly string[],
 	path: string[],
 	missing: Missing[],
 ): string {
-	for (const candidate of buildChain(locale, config)) {
+	for (const candidate of chain) {
 		const value = map[candidate];
 		if (typeof value === "string") return value;
 	}
@@ -69,15 +72,15 @@ function resolveLocale(
 function resolveTree(
 	tree: TranslationTree,
 	locale: string,
-	config: I18nConfig,
+	chain: readonly string[],
 	path: string[],
 	missing: Missing[],
 ): LeafValue {
 	const out: LeafValue = {};
 	for (const [key, val] of Object.entries(tree)) {
 		out[key] = isLocaleMap(val)
-			? resolveLocale(val, locale, config, [...path, key], missing)
-			: resolveTree(val, locale, config, [...path, key], missing);
+			? resolveLocale(val, locale, chain, [...path, key], missing)
+			: resolveTree(val, locale, chain, [...path, key], missing);
 	}
 	return out;
 }
@@ -86,7 +89,7 @@ function resolveTree(
 function resolveNode(
 	node: TreeNode,
 	locale: string,
-	config: I18nConfig,
+	chain: readonly string[],
 	path: string[],
 	missing: Missing[],
 ): LeafValue {
@@ -96,12 +99,12 @@ function resolveNode(
 	// Folder children first, sorted for deterministic output.
 	for (const [name, child] of [...node.children.entries()].sort()) {
 		seen.add(name);
-		out[name] = resolveNode(child, locale, config, [...path, name], missing);
+		out[name] = resolveNode(child, locale, chain, [...path, name], missing);
 	}
 
 	// Then the colocated `t.ts`, merged at the same level.
 	if (node.leaf) {
-		const resolved = resolveTree(node.leaf.value, locale, config, path, missing);
+		const resolved = resolveTree(node.leaf.value, locale, chain, path, missing);
 		for (const [key, val] of Object.entries(resolved)) {
 			if (seen.has(key)) {
 				throw new Error(
@@ -174,14 +177,18 @@ export function transpose(
 		);
 	}
 
+	const requiredSet = new Set(required);
 	const unexpected = config.locales
-		? [...seen].filter((l) => !required.includes(l)).sort()
+		? [...seen].filter((l) => !requiredSet.has(l)).sort()
 		: [];
 
+	// Precompute each locale's fallback chain once, instead of rebuilding it for
+	// every entry × locale.
 	const missing: Missing[] = [];
 	const resolved: Record<string, LeafValue> = {};
 	for (const locale of required) {
-		resolved[locale] = resolveNode(tree, locale, config, [], missing);
+		const chain = buildChain(locale, config);
+		resolved[locale] = resolveNode(tree, locale, chain, [], missing);
 	}
 
 	report(missing, unexpected, config);

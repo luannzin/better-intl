@@ -1,12 +1,23 @@
 import { watch as chokidarWatch } from "chokidar";
+import { basename } from "pathe";
+import { LEAF_FILENAME } from "../scanner/walk.js";
 import type { I18nConfig } from "../types.js";
 import { runGenerate } from "./generate.js";
 
 export { runGenerate };
 
+/** Coalesce bursts (a rename fires unlink+add) into one regen. */
+const DEBOUNCE_MS = 75;
+
+/** True only for an actual `t.ts` leaf — not `list.ts`, `component.ts`, etc. */
+function isLeaf(path: string): boolean {
+	return basename(path) === LEAF_FILENAME;
+}
+
 /**
- * Watch the translations root and regenerate on any change. Used by the dev
- * server (`i18n-gen --watch`). Returns a disposer that stops the watcher.
+ * Watch the scan root and regenerate when a `t.ts` leaf changes. Used by the
+ * dev server (`i18n-gen --watch` and the Next plugin). Returns a disposer that
+ * stops the watcher.
  */
 export async function watch(config: I18nConfig): Promise<() => Promise<void>> {
 	const regen = async (reason: string) => {
@@ -20,18 +31,29 @@ export async function watch(config: I18nConfig): Promise<() => Promise<void>> {
 
 	await regen("initial");
 
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let reason = "";
+	const schedule = (event: string, path: string) => {
+		if (!isLeaf(path)) return; // ignore every non-leaf file event
+		reason = `${event} ${path}`;
+		clearTimeout(timer);
+		timer = setTimeout(() => regen(reason), DEBOUNCE_MS);
+	};
+
+	// Leaf add/unlink already covers new/removed feature folders (chokidar emits
+	// file events for them), so directory events need no separate handler.
 	const watcher = chokidarWatch(config.root, {
 		ignoreInitial: true,
-		// Only care about leaf files and structural changes.
 		ignored: (path) => path.endsWith("~"),
 	});
 
 	watcher
-		.on("add", (p) => p.endsWith("t.ts") && regen(`add ${p}`))
-		.on("change", (p) => p.endsWith("t.ts") && regen(`change ${p}`))
-		.on("unlink", (p) => p.endsWith("t.ts") && regen(`remove ${p}`))
-		.on("addDir", () => regen("addDir"))
-		.on("unlinkDir", () => regen("removeDir"));
+		.on("add", (p) => schedule("add", p))
+		.on("change", (p) => schedule("change", p))
+		.on("unlink", (p) => schedule("remove", p));
 
-	return () => watcher.close();
+	return async () => {
+		clearTimeout(timer);
+		await watcher.close();
+	};
 }
