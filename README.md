@@ -62,15 +62,12 @@ t.homepage.hero.subtitle          // "Bem-vindo"
 
 ## Detecting the active locale
 
-Don't want to pass the locale by hand? Two resolvers hand back the active locale's slice of
-`t` — a **synchronous** one for the client and an **async** one for the server (server cookie
-/ header reads are async in Next). Keeping them separate means `client.ts` never forces your
-module to become async.
-
-Best practice is a small `lib/i18n/` folder:
+Don't want to pass the locale by hand? You can use a single synchronous `t` in **every**
+component — client or server — and have it resolve the active locale automatically. Set up a
+small `lib/i18n/` folder:
 
 ```ts
-// lib/i18n/client.ts
+// lib/i18n/client.ts  — synchronous, reads cookie/localStorage + navigator
 import { findLocaleClient } from "better-intl/runtime"
 import { t as translations, intlConfig } from "@/i18n/generated"
 
@@ -78,11 +75,11 @@ export const t = findLocaleClient(translations, intlConfig)
 ```
 
 ```ts
-// lib/i18n/server.ts
-import { findLocaleServer } from "better-intl/runtime"
+// lib/i18n/server.ts  — synchronous `t` over a per-request store
+import { createServerT } from "better-intl/runtime"
 import { t as translations, intlConfig } from "@/i18n/generated"
 
-export const t = await findLocaleServer(translations, intlConfig)
+export const { t, setLocale } = createServerT(translations, intlConfig)
 ```
 
 ```ts
@@ -91,15 +88,57 @@ import { t as clientT } from "./client"
 import { t as serverT } from "./server"
 
 export const t = typeof window !== "undefined" ? clientT : serverT
+export { setLocale } from "./server"
 ```
 
-```ts
-// any component
+On the server the locale comes from the request (a cookie), which is async — so you read it
+**once per request** in your root layout. After that, every Server Component reads `t`
+synchronously:
+
+```tsx
+// app/layout.tsx — run once per request
+import { Suspense } from "react"
+import { setLocale } from "@/lib/i18n"
+
+async function Localized({ children }: { children: React.ReactNode }) {
+  await setLocale()              // reads the cookie, fills the per-request store
+  return <>{children}</>
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // <Suspense> is required under `cacheComponents` (reading the cookie is dynamic).
+  return (
+    <html>
+      <body>
+        <Suspense fallback={null}>
+          <Localized>{children}</Localized>
+        </Suspense>
+      </body>
+    </html>
+  )
+}
+```
+
+```tsx
+// any component — client or server — uses t synchronously, no await
 import { t } from "@/lib/i18n"
-t.homepage.title({ name: "Ada" })
+
+export function Title() {
+  return <h1>{t.homepage.title({ name: "Ada" })}</h1>
+}
 ```
 
-Both resolve in the same order:
+> **Why `setLocale` + a per-request store?** `t.x.y` is synchronous, but `cookies()` is async
+> in Next. `createServerT` resolves the locale once (in `setLocale`, during render) into a
+> request-scoped store (React's `cache()`), and `t` is a proxy that reads it synchronously.
+> This is concurrency-safe (each request gets its own store) and **does not hang under
+> `cacheComponents`** — only `setLocale` touches `cookies()`, inside render where Next can
+> stream it. Never write `export const t = await findLocaleServer(...)` at module top level:
+> a module evaluates once (locale frozen across requests) and, under `cacheComponents`, the
+> top-level `await cookies()` hangs the prerender. (`findLocaleServer` still exists for ad-hoc
+> `const t = await findLocaleServer(...)` inside a single async Server Component.)
+
+All resolvers resolve in the same order:
 
 1. the **stored preference** (cookie or `localStorage`, per your config);
 2. else the **browser** languages (`navigator.languages`, client) or the **`Accept-Language`**

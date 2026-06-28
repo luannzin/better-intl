@@ -1,6 +1,6 @@
 {
 	"name": "better-intl",
-	"version": "1.3.2",
+	"version": "1.4.0",
 	"description": "The most comprehensive internationalization framework for Next.js",
 	"type": "module",
 	"main": "./dist/index.cjs",
@@ -58,7 +58,17 @@
 		"pathe": "^2.0.3"
 	},
 	"peerDependencies": {
-		"esbuild": "*"
+		"esbuild": "*",
+		"next": "*",
+		"react": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"next": {
+			"optional": true
+		},
+		"react": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@types/node": "^26.0.0",

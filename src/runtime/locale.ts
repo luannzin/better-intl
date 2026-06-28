@@ -12,10 +12,14 @@
  *     natural.
  *
  * `updateLocale` persists a preference and stays isomorphic (a button handler
- * may run on either side). This entry (`better-intl/runtime`) imports none of
- * the codegen, so it is safe in a client bundle.
+ * may run on either side). `createServerT` exposes a **synchronous** `t` for
+ * Server Components, backed by a per-request store. This entry
+ * (`better-intl/runtime`) imports none of the codegen, so it is safe in a client
+ * bundle.
  */
 
+// @ts-ignore — `react` is a peer dependency, resolved in the user's app.
+import { cache } from "react";
 import type { LocaleStorage } from "../types.js";
 import { matchLocale } from "./detectLocale.js";
 
@@ -132,6 +136,20 @@ function sliceFor<T extends Record<string, unknown>>(
 	return translations[fallback as keyof T];
 }
 
+/** Resolve the active locale **string** on the server (cookie → Accept-Language). */
+async function resolveServerLocale<T extends Record<string, unknown>>(
+	translations: T,
+	config: IntlRuntimeConfig<Extract<keyof T, string>>,
+): Promise<Extract<keyof T, string>> {
+	const { supported, fallback, storage } = settings(translations, config);
+	if (typeof window !== "undefined") return fallback as Extract<keyof T, string>;
+	for (const candidate of await serverCandidates(storage)) {
+		const hit = matchLocale(candidate, supported);
+		if (hit) return hit;
+	}
+	return fallback as Extract<keyof T, string>;
+}
+
 /**
  * **Client-side** locale resolution — synchronous. Detects from the stored
  * preference (cookie / `localStorage`) → `navigator.languages` → `defaultLocale`,
@@ -187,18 +205,78 @@ export async function findLocaleServer<T extends Record<string, unknown>>(
 	translations: T,
 	config: IntlRuntimeConfig<Extract<keyof T, string>> = {},
 ): Promise<T[keyof T]> {
-	const { supported, fallback, storage } = settings(translations, config);
+	return translations[await resolveServerLocale(translations, config)];
+}
 
-	// Not on a server: no request cookies/headers to read, and `next/headers`
-	// must not be imported in the browser. Resolve to the default locale.
-	if (typeof window !== "undefined") return translations[fallback as keyof T];
+/**
+ * Build a **synchronous** server `t` you can use like `t.homepage.title(...)` in
+ * any Server Component — no `await`, no per-component call. It returns a proxy
+ * over a **per-request** locale store (React's `cache()`), plus a `setLocale`
+ * you call **once** near the top of the request (your root layout) to read the
+ * cookie/`Accept-Language` and populate the store.
+ *
+ * This is the cacheComponents-safe shape: only `setLocale()` touches
+ * `cookies()` — and it does so inside render, where Next can mark it dynamic —
+ * while the `t` proxy is pure synchronous reads, so nothing hangs the prerender.
+ * Before `setLocale()` runs (or inside a `use cache` boundary, which isolates
+ * React's `cache`), `t` resolves to `defaultLocale`.
+ *
+ * @example
+ * ```ts
+ * // lib/i18n/server.ts
+ * import { createServerT } from "better-intl/runtime";
+ * import { t as translations, intlConfig } from "@/i18n/generated";
+ * export const { t, setLocale } = createServerT(translations, intlConfig);
+ * ```
+ * ```tsx
+ * // app/layout.tsx — run once per request
+ * import { setLocale } from "@/lib/i18n/server";
+ * export default async function RootLayout({ children }) {
+ *   await setLocale();
+ *   return <html><body>{children}</body></html>;
+ * }
+ * ```
+ * ```tsx
+ * // any Server Component — use t directly, synchronously
+ * import { t } from "@/lib/i18n/server";
+ * export default function Title() { return <h1>{t.homepage.title({ name: "Ada" })}</h1>; }
+ * ```
+ */
+export function createServerT<T extends Record<string, unknown>>(
+	translations: T,
+	config: IntlRuntimeConfig<Extract<keyof T, string>> = {},
+): { t: T[keyof T]; setLocale: () => Promise<Extract<keyof T, string>> } {
+	const fallback = (config.defaultLocale ??
+		Object.keys(translations)[0]) as Extract<keyof T, string>;
 
-	return sliceFor(
-		translations,
-		await serverCandidates(storage),
-		supported,
-		fallback,
-	);
+	// React's `cache` gives one store instance per request (and is isolated from
+	// any `use cache` boundary), so this is concurrency-safe under SSR.
+	const store = cache((): { locale: Extract<keyof T, string> } => ({
+		locale: fallback,
+	}));
+
+	const setLocale = async (): Promise<Extract<keyof T, string>> => {
+		const locale = await resolveServerLocale(translations, config);
+		store().locale = locale;
+		return locale;
+	};
+
+	const slice = (): Record<PropertyKey, unknown> =>
+		translations[store().locale] as Record<PropertyKey, unknown>;
+
+	const t = new Proxy(Object.create(null), {
+		get: (_target, key) => slice()[key],
+		has: (_target, key) => key in slice(),
+		ownKeys: () => Reflect.ownKeys(slice()),
+		getOwnPropertyDescriptor: (_target, key) => {
+			const desc = Object.getOwnPropertyDescriptor(slice(), key);
+			// The proxy target is empty, so descriptors must be configurable.
+			if (desc) desc.configurable = true;
+			return desc;
+		},
+	}) as T[keyof T];
+
+	return { t, setLocale };
 }
 
 /**
