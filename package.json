@@ -23,6 +23,9 @@
 			"require": "./dist/runtime.cjs"
 		}
 	},
+	"bin": {
+		"better-intl": "./dist/cli.js"
+	},
 	"files": [
 		"dist"
 	],

@@ -99,20 +99,22 @@ The file system becomes your i18n structure.
 bun add better-intl
 ```
 
-#### Or scaffold everything at once
+---
+
+### 2. Scaffold
 
 ```bash
 bunx --bun better-intl init
 ```
 
-`init` writes `intl.config.ts`, drops a starter `app/t.ts`, runs the first
-generate, and prints the two manual steps below. It is idempotent — existing
-files are left untouched. If you run it, skip to step 5; steps 2–4 are what it
-sets up (and explains).
+`init` writes `intl.config.ts`, drops a starter `app/t.ts`, and runs the first
+generate. It is idempotent — existing files are left untouched. The two steps
+below (the Next plugin and the layout `setLocale`) are the wiring `init` can't do
+for you — both are required.
 
 ---
 
-### 2. Add the plugin
+### 3. Add the plugin
 
 ```ts
 // next.config.ts
@@ -127,7 +129,10 @@ That’s it. No webpack plugins. No runtime setup.
 
 ---
 
-### 3. Configure
+### 4. Configure (optional)
+
+`init` already wrote a working `intl.config.ts`. Tweak it as you grow — add
+locales, fallback chains, change the scan root:
 
 ```ts
 // intl.config.ts
@@ -155,7 +160,7 @@ export default {
 
 ---
 
-### 4. There's no step 4
+### 5. Import `t`
 
 The generated module already exports everything bound to your `translations`
 and config — there's no `lib/i18n` wiring to write. Import `t` straight from it:
@@ -171,7 +176,7 @@ the generator calls for you.
 
 ---
 
-### 5. Initialize locale once (App Router)
+### 6. Initialize locale once (App Router)
 
 ```tsx
 // app/layout.tsx
