@@ -107,7 +107,7 @@ bun add better-intl
 bunx --bun better-intl init
 ```
 
-`init` writes `intl.config.ts`, drops a starter `app/t.ts`, and runs the first
+`init` writes `intl.config.ts`, runs the first
 generate. It is idempotent — existing files are left untouched. The two steps
 below (the Next plugin and the layout `setLocale`) are the wiring `init` can't do
 for you — both are required.

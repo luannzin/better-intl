@@ -10,7 +10,7 @@ const CONFIG_TEMPLATE = `import type { I18nUserConfig } from "better-intl"
 
 export default {
 	// Directory scanned for colocated \`t.ts\` files.
-	root: "./app",
+	root: "./src",
 
 	// Where the generated module is written.
 	out: "./src/i18n/generated.ts",
@@ -25,15 +25,6 @@ export default {
 	// Where the active locale preference is persisted (cookie is the only store).
 	storage: { type: "cookie", key: "locale" },
 } satisfies I18nUserConfig
-`;
-
-/** A starter leaf so the first generate has something to transpose. */
-const STARTER_LEAF = `export default {
-	homepage: {
-		title: { en: "Hello {name}", pt: "Olá {name}" },
-		subtitle: { en: "Welcome", pt: "Bem-vindo" },
-	},
-}
 `;
 
 /** Write `file` with `content` unless it already exists. Returns what happened. */
@@ -55,44 +46,51 @@ function log(action: "created" | "skipped", rel: string): void {
 
 /**
  * Scaffold a fresh better-intl setup in the current project: write
- * `intl.config.ts`, drop a starter `app/t.ts`, run the first generate, then
- * print the remaining manual wiring (Next plugin + layout). Idempotent — any
- * file that already exists is left untouched.
+ * `intl.config.ts`, ensure the scan root exists, generate from any existing
+ * `t.ts` leaves, then print the remaining manual wiring (Next plugin + layout).
+ * Idempotent — any file that already exists is left untouched, and the generate
+ * is skipped (not failed) when there are no leaves yet.
  */
 export async function runInit(): Promise<void> {
 	const cwd = process.cwd();
+	const rel = (p: string) => resolve(p).replace(`${cwd}/`, "");
 
 	const configPath = resolve(cwd, "intl.config.ts");
 	log(await writeIfAbsent(configPath, CONFIG_TEMPLATE), "intl.config.ts");
 
-	// Resolve `root` from whatever config now applies so the starter leaf lands
-	// where the generator will actually scan.
 	const config = defineConfig(await loadUserConfig());
-	const leafPath = resolve(config.root, "t.ts");
-	log(
-		await writeIfAbsent(leafPath, STARTER_LEAF),
-		`${resolve(config.root).replace(`${cwd}/`, "")}/t.ts`,
-	);
+	await mkdir(config.root, { recursive: true });
 
-	const locales = await runGenerate(config);
-	console.log(
-		`[i18n] + ${config.out.replace(`${cwd}/`, "")} -> ${locales.join(", ")}`,
-	);
+	try {
+		const locales = await runGenerate(config);
+		console.log(`[i18n] + ${rel(config.out)} -> ${locales.join(", ")}`);
+	} catch (err) {
+		// No `t.ts` leaves yet — that's expected on a brand-new project, not a
+		// failure. Anything else is a real error worth surfacing.
+		if (!/No t\.ts files found/.test((err as Error).message)) throw err;
+		console.log(`[i18n] no t.ts files yet — add one, then run \`better-intl\``);
+	}
 
-	printNextSteps();
+	printNextSteps(rel(config.root));
 }
 
-function printNextSteps(): void {
+function printNextSteps(root: string): void {
 	console.log(`
-[i18n] Setup ready. Two manual steps left:
+[i18n] Setup ready. Next:
 
-1. Wrap your Next config:
+1. Author translations in a colocated t.ts, e.g. ${root}/homepage/t.ts:
+
+   export default {
+     title: { en: "Hello {name}", pt: "Olá {name}" },
+   }
+
+2. Wrap your Next config:
 
    // next.config.ts
    import { withInternationalization } from "better-intl/next"
    export default withInternationalization({ /* your config */ })
 
-2. Fill the locale once per request in the root layout:
+3. Fill the locale once per request in the root layout:
 
    // app/layout.tsx
    import { Suspense } from "react"
