@@ -90,19 +90,15 @@ function printNextSteps(root: string): void {
    import { withInternationalization } from "better-intl/next"
    export default withInternationalization({ /* your config */ })
 
-3. Fill the locale once per request in the root layout:
+3. Fill the locale once per request in the root layout and stamp <html lang>
+   (the lang is what the client reads first, so there's no locale flash):
 
    // app/layout.tsx
-   import { Suspense } from "react"
    import { setLocale } from "@/i18n/generated"
 
-   async function Localized({ children }) {
-     await setLocale()
-     return children
-   }
-
-   export default function RootLayout({ children }) {
-     return <html><body><Suspense>{<Localized>{children}</Localized>}</Suspense></body></html>
+   export default async function RootLayout({ children }) {
+     const locale = await setLocale()
+     return <html lang={locale}><body>{children}</body></html>
    }
 
 Then import { t } from "@/i18n/generated" anywhere — sync on client and server.

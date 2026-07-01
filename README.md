@@ -178,24 +178,21 @@ the generator calls for you.
 
 ### 6. Initialize locale once (App Router)
 
+Resolve the locale once per request and stamp it on `<html lang>`. `setLocale()`
+fills the server store **and** returns the locale — the client reads that `lang`
+first, so its first render matches the server HTML and there's **no locale
+flash**.
+
 ```tsx
 // app/layout.tsx
-import { Suspense } from "react"
 import { setLocale } from "@/i18n/generated"
 
-async function Localized({ children }: { children: React.ReactNode }) {
-  await setLocale()
-  return children
-}
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await setLocale()
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html>
-      <body>
-        <Suspense fallback={null}>
-          <Localized>{children}</Localized>
-        </Suspense>
-      </body>
+    <html lang={locale}>
+      <body>{children}</body>
     </html>
   )
 }

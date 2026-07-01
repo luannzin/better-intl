@@ -66,11 +66,21 @@ function parseAcceptLanguage(header: string | null | undefined): string[] {
 		.map((entry) => entry.tag);
 }
 
-/** Gather locale candidates in the browser: stored cookie, then navigator. */
+/**
+ * Gather locale candidates in the browser, highest priority first:
+ *   1. `<html lang>` — what the **server** resolved for *this* page load. Reading
+ *      it first makes the client's first synchronous render match the server
+ *      HTML exactly, so hydration never repaints (no locale flash). Requires the
+ *      root layout to set `<html lang={await setLocale()}>`.
+ *   2. the stored cookie, then `navigator` — the fallback when no server lang is
+ *      present (e.g. a purely client-rendered app).
+ */
 function clientCandidates(storage: LocaleStorage): string[] {
 	const candidates: string[] = [];
 
 	if (typeof document !== "undefined") {
+		const serverLang = document.documentElement.lang;
+		if (serverLang) candidates.push(serverLang);
 		const stored = parseCookies(document.cookie)[storage.key];
 		if (stored) candidates.push(stored);
 	}
@@ -147,10 +157,11 @@ async function resolveServerLocale<T extends Record<string, unknown>>(
 }
 
 /**
- * **Client-side** locale resolution — synchronous. Detects from the stored
- * preference (cookie) → `navigator.languages` → `defaultLocale`,
- * matched tolerant of region subtags (`pt-BR` matches `pt`), and returns that
- * locale's slice of the generated `t`.
+ * **Client-side** locale resolution — synchronous. Detects from `<html lang>`
+ * (what the server rendered for this page — read first so hydration matches) →
+ * stored cookie → `navigator.languages` → `defaultLocale`, matched tolerant of
+ * region subtags (`pt-BR` matches `pt`), and returns that locale's slice of the
+ * generated `t`.
  *
  * **Safe to evaluate on the server.** When `lib/i18n/index.ts` imports both
  * `./client` and `./server`, this runs during SSR too; with no browser globals
@@ -225,11 +236,12 @@ export async function findLocaleServer<T extends Record<string, unknown>>(
  * export const { t, setLocale } = createServerT(translations, intlConfig);
  * ```
  * ```tsx
- * // app/layout.tsx — run once per request
+ * // app/layout.tsx — run once per request; stamp <html lang> so the client's
+ * // `findLocaleClient` reads the same locale first and hydration never flashes.
  * import { setLocale } from "@/lib/i18n/server";
  * export default async function RootLayout({ children }) {
- *   await setLocale();
- *   return <html><body>{children}</body></html>;
+ *   const locale = await setLocale();
+ *   return <html lang={locale}><body>{children}</body></html>;
  * }
  * ```
  * ```tsx
