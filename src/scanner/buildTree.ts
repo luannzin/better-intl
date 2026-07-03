@@ -8,14 +8,26 @@ import type { Leaf, TreeNode } from "../types.js";
  * dropped) become nested keys. Example:
  *
  *   root/pt/homepage/hero/t.ts  ->  tree.pt.homepage.hero.leaf
+ *
+ * Route-group folders — names wrapped in parens like `(routes)` or
+ * `(legal)` — are transparent: the segment itself is dropped, but its
+ * contents still nest into the parent. So `app/(legal)/privacy/t.ts`
+ * becomes `tree.privacy.leaf`, not `tree["(legal)"].privacy.leaf`.
  */
+const isRouteGroup = (segment: string): boolean =>
+	segment.startsWith("(") && segment.endsWith(")");
+
 export function buildTree(root: string, leaves: Leaf[]): TreeNode {
 	const tree: TreeNode = { children: new Map() };
 
 	for (const leaf of leaves) {
 		const rel = relative(root, leaf.file);
 		// Drop the trailing `t.ts` segment; the rest are folder keys.
-		const segments = rel.split("/").slice(0, -1);
+		// Route-group folders `(…)` are skipped — transparent to the key path.
+		const segments = rel
+			.split("/")
+			.slice(0, -1)
+			.filter((segment) => !isRouteGroup(segment));
 
 		let node = tree;
 		for (const segment of segments) {
