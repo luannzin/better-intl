@@ -129,18 +129,19 @@ function settings<T extends Record<string, unknown>>(
 	};
 }
 
-/** First candidate that matches a supported locale → its slice, else fallback. */
-function sliceFor<T extends Record<string, unknown>>(
+/** Resolve the active locale **string** in the browser (`<html lang>` → cookie → `navigator`). */
+function resolveClientLocale<T extends Record<string, unknown>>(
 	translations: T,
-	candidates: string[],
-	supported: readonly Extract<keyof T, string>[],
-	fallback: Extract<keyof T, string> | undefined,
-): T[keyof T] {
-	for (const candidate of candidates) {
+	config: IntlRuntimeConfig<Extract<keyof T, string>>,
+): Extract<keyof T, string> {
+	const { supported, fallback, storage } = settings(translations, config);
+	if (typeof window === "undefined")
+		return fallback as Extract<keyof T, string>;
+	for (const candidate of clientCandidates(storage)) {
 		const hit = matchLocale(candidate, supported);
-		if (hit) return translations[hit];
+		if (hit) return hit;
 	}
-	return translations[fallback as keyof T];
+	return fallback as Extract<keyof T, string>;
 }
 
 /** Resolve the active locale **string** on the server (cookie → Accept-Language). */
@@ -181,13 +182,7 @@ export function findLocaleClient<T extends Record<string, unknown>>(
 	translations: T,
 	config: IntlRuntimeConfig<Extract<keyof T, string>> = {},
 ): T[keyof T] {
-	const { supported, fallback, storage } = settings(translations, config);
-
-	// Not in a browser: no cookie/navigator to read. Resolve to the
-	// default locale so this is harmless when evaluated during SSR.
-	if (typeof window === "undefined") return translations[fallback as keyof T];
-
-	return sliceFor(translations, clientCandidates(storage), supported, fallback);
+	return translations[resolveClientLocale(translations, config)];
 }
 
 /**
@@ -266,7 +261,11 @@ export async function findLocaleServer<T extends Record<string, unknown>>(
 export function createServerT<T extends Record<string, unknown>>(
 	translations: T,
 	config: IntlRuntimeConfig<Extract<keyof T, string>> = {},
-): { t: T[keyof T]; setLocale: () => Promise<Extract<keyof T, string>> } {
+): {
+	t: T[keyof T];
+	setLocale: () => Promise<Extract<keyof T, string>>;
+	getLocale: () => Extract<keyof T, string>;
+} {
 	const fallback = (config.defaultLocale ??
 		Object.keys(translations)[0]) as Extract<keyof T, string>;
 
@@ -274,19 +273,25 @@ export function createServerT<T extends Record<string, unknown>>(
 	// (and isolated from any `use cache` boundary). Kicking it off is idempotent,
 	// so whichever segment renders first — layout or a parallel page — starts it,
 	// and every reader awaits the *same* promise identity (which `use` requires).
-	const getLocale = cache(
+	const localeOnce = cache(
 		(): Promise<Extract<keyof T, string>> =>
 			resolveServerLocale(translations, config),
 	);
 
 	// Awaited once by the layout for `<html lang>`; warms the shared promise.
-	const setLocale = (): Promise<Extract<keyof T, string>> => getLocale();
+	const setLocale = (): Promise<Extract<keyof T, string>> => localeOnce();
+
+	// The current locale **string**, synchronously — `use` unwraps the shared
+	// per-request promise, so this must be called during render (like `t`). Use
+	// it when you need the locale itself (e.g. `<html lang>`, date formatting)
+	// rather than a translation.
+	const getLocale = (): Extract<keyof T, string> => use(localeOnce());
 
 	// The active locale's slice. `use` synchronously unwraps the per-request
 	// promise: the first `t.*` access suspends until the cookie is read, then
 	// resolves — closing the layout/page render race with no `await` in userland.
 	const slice = (): Record<PropertyKey, unknown> =>
-		translations[use(getLocale())] as Record<PropertyKey, unknown>;
+		translations[getLocale()] as Record<PropertyKey, unknown>;
 
 	// Structural traps only need the key *shape*, which is identical across
 	// locales (missing keys are filled at generation). Reading the fallback slice
@@ -307,7 +312,7 @@ export function createServerT<T extends Record<string, unknown>>(
 		},
 	}) as T[keyof T];
 
-	return { t, setLocale };
+	return { t, setLocale, getLocale };
 }
 
 /**
@@ -321,6 +326,10 @@ export function createServerT<T extends Record<string, unknown>>(
  *     at module init, by `typeof window`.
  *   - `setLocale()` — call once per request in the root layout (server). A no-op
  *     on the client.
+ *   - `getLocale()` — the current locale **string** (not a slice), synchronously.
+ *     On the client it reads `<html lang>`/cookie/`navigator`; on the server it
+ *     unwraps the same per-request promise as `t` (so, like `t`, call it during
+ *     render). Use it for `<html lang>`, `Intl` formatters, `dir`, etc.
  *   - `updateLocale(locale)` — persist a new preference to the cookie, bound to
  *     the configured storage.
  *
@@ -328,7 +337,7 @@ export function createServerT<T extends Record<string, unknown>>(
  * ```ts
  * // emitted into generated.ts
  * const i18n = createI18n(translations, intlConfig);
- * export const { t, setLocale, updateLocale } = i18n;
+ * export const { t, setLocale, getLocale, updateLocale } = i18n;
  * ```
  */
 export function createI18n<T extends Record<string, unknown>>(
@@ -337,16 +346,19 @@ export function createI18n<T extends Record<string, unknown>>(
 ): {
 	t: T[keyof T];
 	setLocale: () => Promise<Extract<keyof T, string>>;
+	getLocale: () => Extract<keyof T, string>;
 	updateLocale: (locale: Extract<keyof T, string>) => Promise<void>;
 } {
 	const server = createServerT(translations, config);
-	const t =
-		typeof window !== "undefined"
-			? findLocaleClient(translations, config)
-			: server.t;
+	const onClient = typeof window !== "undefined";
+	const t = onClient ? findLocaleClient(translations, config) : server.t;
+	const getLocale = onClient
+		? (): Extract<keyof T, string> => resolveClientLocale(translations, config)
+		: server.getLocale;
 	return {
 		t,
 		setLocale: server.setLocale,
+		getLocale,
 		updateLocale: (locale) => updateLocale(locale, config),
 	};
 }

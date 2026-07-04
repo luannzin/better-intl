@@ -82,7 +82,7 @@ function emitIntlConfig(
 /**
  * Emit the full generated module source: the `translations` object, the
  * `Locale` type, the `intlConfig` data, and the ready-to-use `t` / `setLocale` /
- * `updateLocale` produced by `createI18n` — bound to `translations` +
+ * `getLocale` / `updateLocale` produced by `createI18n` — bound to `translations` +
  * `intlConfig` so the app never re-passes them. The input is the transposed
  * `{ [locale]: resolvedTree }` object — each top-level key is a locale.
  */
@@ -101,8 +101,9 @@ export const intlConfig = ${emitIntlConfig(resolved, config)} as const;
 
 // Helpers bound to \`translations\` + \`intlConfig\` once. Import \`t\` anywhere
 // (sync on both client and server); call \`setLocale()\` once per request in the
-// root layout; call \`updateLocale(locale)\` to persist a new preference.
+// root layout; \`getLocale()\` returns the active locale string; call
+// \`updateLocale(locale)\` to persist a new preference.
 const i18n = createI18n(translations, intlConfig);
-export const { t, setLocale, updateLocale } = i18n;
+export const { t, setLocale, getLocale, updateLocale } = i18n;
 `;
 }
