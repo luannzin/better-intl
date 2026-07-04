@@ -33,7 +33,8 @@
 		"i18n:gen": "node ./dist/cli.js",
 		"build": "tsup",
 		"dev": "tsup --watch",
-		"test": "node --import tsx --test test/*.test.ts"
+		"test": "node --import tsx --test test/*.test.ts",
+		"prepublishOnly": "tsup"
 	},
 	"keywords": [
 		"i18n",

@@ -13,13 +13,15 @@
  *
  * `updateLocale` persists a preference and stays isomorphic (a button handler
  * may run on either side). `createServerT` exposes a **synchronous** `t` for
- * Server Components, backed by a per-request store. This entry
+ * Server Components, backed by a per-request locale promise unwrapped with
+ * React's `use()` (so a page that reads `t` before the layout resolves the
+ * locale still gets the right one — no render-order race). This entry
  * (`better-intl/runtime`) imports none of the codegen, so it is safe in a client
  * bundle.
  */
 
 // @ts-expect-error — `react` is a peer dependency, resolved in the user's app.
-import { cache } from "react";
+import { cache, use } from "react";
 import type { LocaleStorage } from "../types.js";
 import { matchLocale } from "./detectLocale.js";
 
@@ -218,15 +220,26 @@ export async function findLocaleServer<T extends Record<string, unknown>>(
 /**
  * Build a **synchronous** server `t` you can use like `t.homepage.title(...)` in
  * any Server Component — no `await`, no per-component call. It returns a proxy
- * over a **per-request** locale store (React's `cache()`), plus a `setLocale`
- * you call **once** near the top of the request (your root layout) to read the
- * cookie/`Accept-Language` and populate the store.
+ * over a **per-request** locale (resolved once via React's `cache()`), plus a
+ * `setLocale` the root layout awaits to stamp `<html lang>`.
  *
- * This is the cacheComponents-safe shape: only `setLocale()` touches
- * `cookies()` — and it does so inside render, where Next can mark it dynamic —
- * while the `t` proxy is pure synchronous reads, so nothing hangs the prerender.
- * Before `setLocale()` runs (or inside a `use cache` boundary, which isolates
- * React's `cache`), `t` resolves to `defaultLocale`.
+ * **Why it isn't racy:** the locale is a per-request memoised *promise*, and the
+ * proxy unwraps it with React's `use()` — the RSC-native "await inside render".
+ * The first `t.*` access in **any** segment starts (or joins) that one promise
+ * and suspends until the cookie is read; every later read, in every component,
+ * gets the resolved value synchronously. So it does **not** depend on the layout
+ * running before the page — Next renders segments in parallel, and a page that
+ * reads `t` before the layout's `setLocale()` has finished still resolves the
+ * correct locale (they await the same promise) instead of the default.
+ *
+ * `setLocale()` awaits the same promise; call it once in the root layout to get
+ * the locale for `<html lang>` (and to warm resolution). It is no longer what
+ * makes `t` correct — the proxy resolves independently.
+ *
+ * Because resolution reads `cookies()`, a component that uses `t` is dynamic —
+ * which is correct: localized output depends on the request. Inside a `use cache`
+ * boundary (which isolates React's `cache` and forbids `cookies()`), resolution
+ * degrades to `defaultLocale`.
  *
  * @example
  * ```ts
@@ -257,27 +270,37 @@ export function createServerT<T extends Record<string, unknown>>(
 	const fallback = (config.defaultLocale ??
 		Object.keys(translations)[0]) as Extract<keyof T, string>;
 
-	// React's `cache` gives one store instance per request (and is isolated from
-	// any `use cache` boundary), so this is concurrency-safe under SSR.
-	const store = cache((): { locale: Extract<keyof T, string> } => ({
-		locale: fallback,
-	}));
+	// One resolution per request, memoised as a *promise* by React's `cache`
+	// (and isolated from any `use cache` boundary). Kicking it off is idempotent,
+	// so whichever segment renders first — layout or a parallel page — starts it,
+	// and every reader awaits the *same* promise identity (which `use` requires).
+	const getLocale = cache(
+		(): Promise<Extract<keyof T, string>> =>
+			resolveServerLocale(translations, config),
+	);
 
-	const setLocale = async (): Promise<Extract<keyof T, string>> => {
-		const locale = await resolveServerLocale(translations, config);
-		store().locale = locale;
-		return locale;
-	};
+	// Awaited once by the layout for `<html lang>`; warms the shared promise.
+	const setLocale = (): Promise<Extract<keyof T, string>> => getLocale();
 
+	// The active locale's slice. `use` synchronously unwraps the per-request
+	// promise: the first `t.*` access suspends until the cookie is read, then
+	// resolves — closing the layout/page render race with no `await` in userland.
 	const slice = (): Record<PropertyKey, unknown> =>
-		translations[store().locale] as Record<PropertyKey, unknown>;
+		translations[use(getLocale())] as Record<PropertyKey, unknown>;
+
+	// Structural traps only need the key *shape*, which is identical across
+	// locales (missing keys are filled at generation). Reading the fallback slice
+	// keeps enumeration (`in`, `Object.keys`, spread descriptors) safe even if a
+	// trap is triggered outside render, where `use` would be illegal.
+	const shape = (): Record<PropertyKey, unknown> =>
+		translations[fallback] as Record<PropertyKey, unknown>;
 
 	const t = new Proxy(Object.create(null), {
 		get: (_target, key) => slice()[key],
-		has: (_target, key) => key in slice(),
-		ownKeys: () => Reflect.ownKeys(slice()),
+		has: (_target, key) => key in shape(),
+		ownKeys: () => Reflect.ownKeys(shape()),
 		getOwnPropertyDescriptor: (_target, key) => {
-			const desc = Object.getOwnPropertyDescriptor(slice(), key);
+			const desc = Object.getOwnPropertyDescriptor(shape(), key);
 			// The proxy target is empty, so descriptors must be configurable.
 			if (desc) desc.configurable = true;
 			return desc;
