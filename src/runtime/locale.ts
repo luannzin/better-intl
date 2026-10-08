@@ -266,26 +266,54 @@ export function createServerT<T extends Record<string, unknown>>(
 	setLocale: () => Promise<Extract<keyof T, string>>;
 	getLocale: () => Extract<keyof T, string>;
 } {
+	type Locale = Extract<keyof T, string>;
 	const fallback = (config.defaultLocale ??
-		Object.keys(translations)[0]) as Extract<keyof T, string>;
+		Object.keys(translations)[0]) as Locale;
 
 	// One resolution per request, memoised as a *promise* by React's `cache`
 	// (and isolated from any `use cache` boundary). Kicking it off is idempotent,
 	// so whichever segment renders first — layout or a parallel page — starts it,
 	// and every reader awaits the *same* promise identity (which `use` requires).
-	const localeOnce = cache(
-		(): Promise<Extract<keyof T, string>> =>
-			resolveServerLocale(translations, config),
-	);
+	// The entry also keeps the resolved value, so later reads don't need `use`.
+	const localeOnce = cache(() => {
+		const entry: { promise: Promise<Locale>; value?: Locale } = {
+			promise: resolveServerLocale(translations, config).then((locale) => {
+				entry.value = locale;
+				return locale;
+			}),
+		};
+		return entry;
+	});
 
 	// Awaited once by the layout for `<html lang>`; warms the shared promise.
-	const setLocale = (): Promise<Extract<keyof T, string>> => localeOnce();
+	// Also the way to read `t` in an async Server Component or `generateMetadata`:
+	// `await setLocale()` first, then `t` reads the resolved value.
+	const setLocale = (): Promise<Locale> => localeOnce().promise;
 
-	// The current locale **string**, synchronously — `use` unwraps the shared
-	// per-request promise, so this must be called during render (like `t`). Use
-	// it when you need the locale itself (e.g. `<html lang>`, date formatting)
-	// rather than a translation.
-	const getLocale = (): Extract<keyof T, string> => use(localeOnce());
+	// The current locale **string**, synchronously. Once the per-request promise
+	// has settled it returns the stored value, which also works after an `await`
+	// in an async Server Component. Before that, `use` unwraps the promise, so
+	// the first read must happen during render (like `t`). Use it when you need
+	// the locale itself (e.g. `<html lang>`, date formatting) rather than a
+	// translation.
+	const getLocale = (): Locale => {
+		const entry = localeOnce();
+		if (entry.value !== undefined) return entry.value;
+		try {
+			return use(entry.promise);
+		} catch (error) {
+			// `use` has no dispatcher after an `await` in an async component and
+			// fails with a TypeError. Suspense signals are not TypeErrors.
+			if (error instanceof TypeError) {
+				throw new Error(
+					"better-intl: `t` was read after an `await` before the locale was resolved. " +
+						"In async Server Components and `generateMetadata`, call `await setLocale()` before reading `t`.",
+					{ cause: error },
+				);
+			}
+			throw error;
+		}
+	};
 
 	// The active locale's slice. `use` synchronously unwraps the per-request
 	// promise: the first `t.*` access suspends until the cookie is read, then

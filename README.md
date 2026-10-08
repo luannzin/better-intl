@@ -233,6 +233,24 @@ export function Header() {
 
 No hooks. No async. No context.
 
+### Async Server Components and `generateMetadata`
+
+On the server, the first read of `t` waits for the locale with React's `use()`,
+which isn't available after an `await`. In an async component (or
+`generateMetadata`), call `await setLocale()` first; after that, `t` reads the
+resolved locale anywhere in the function:
+
+```tsx
+import { setLocale, t } from "@/i18n/generated"
+
+export default async function Page() {
+  await setLocale()
+  const posts = await getPosts()
+
+  return <h1>{t.blog.title}</h1>
+}
+```
+
 ---
 
 # 🌍 Locale resolution
